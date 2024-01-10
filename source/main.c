@@ -1,14 +1,21 @@
 #include <gccore.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <sdcard/wiisd_io.h>
 #include <malloc.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fat.h>
 
 #include "stub_bin.h"
+#include "isfs.h"
 
 static void *xfb = NULL;
 static GXRModeObj *rmode = NULL;
+
+// I/O devices
+const DISC_INTERFACE *sd_slot = &__io_wiisd;
+const DISC_INTERFACE *usb = &__io_usbstorage;
 
 typedef struct _dolheader {
     u32 text_pos[7];
@@ -90,6 +97,34 @@ static int load(entry_point *ep) {
   return 0;
 }
 
+s32 init_fat() {
+  // Initialize IO
+  usb->startup();
+  sd_slot->startup();
+
+  // Check if the SD Card is inserted
+  bool isInserted = __io_wiisd.isInserted();
+
+  // Try to mount the SD Card before the USB
+  if (isInserted) {
+    fatMountSimple("fat", sd_slot);
+  } else {
+    // Since the SD Card is not inserted, we will attempt to mount the USB.
+    bool USB = __io_usbstorage.isInserted();
+    if (USB) {
+      fatMountSimple("fat", usb);
+    } else {
+      __io_usbstorage.shutdown();
+      __io_wiisd.shutdown();
+      printf("No SD Card or USB is inserted");
+      sleep(5);
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
 int main() {
   // Stub from the homebrew channel
   memcpy((u32 *) 0x80001800, stub_bin, stub_bin_size);
@@ -108,6 +143,35 @@ int main() {
   VIDEO_WaitVSync();
   if (rmode->viTVMode & VI_NON_INTERLACE)
     VIDEO_WaitVSync();
+
+  // Determine if we boot from the SD Card or run the installer
+  ISFS_Initialize();
+  init_fat();
+
+  u32 size = 0;
+  void* data = ISFS_GetFile(&size);
+  if (data)
+  {
+    // Load from I/O
+    FILE* fp = fopen((char*)data, "rb");
+    if (!fp)
+    {
+      printf("Application no longer exists. Please reinstall from the Open Shop Channel");
+      sleep(5);
+      return 0;
+    }
+
+    fseek(fp,0,SEEK_END);
+    size_t fsize = ftell(fp);
+    fseek(fp,0,SEEK_SET);
+
+    void* buf = malloc(fsize+1);
+    fread(buf, 1, fsize, fp);
+
+    entry_point ep = 0;
+    reloc(&ep, (u8*)buf, fsize);
+    ep();
+  }
 
   entry_point ep = 0;
   int ret = load(&ep);
