@@ -153,7 +153,10 @@ int main() {
   if (data)
   {
     // Load from I/O
-    FILE* fp = fopen((char*)data, "rb");
+    // We first need to null terminate the buffer.
+    char* file_path = (char*)data;
+    file_path[size] = '\0';
+    FILE* fp = fopen((char*)file_path, "rb");
     if (!fp)
     {
       printf("Application no longer exists. Please reinstall from the Open Shop Channel");
